@@ -10,8 +10,6 @@ import flet as ft
 
 APP_DIR = Path(os.environ.get("FLET_APP_STORAGE_DATA") or (Path.home() / ".organizador_semanal"))
 APP_DIR.mkdir(parents=True, exist_ok=True)
-
-DB_PATH = APP_DIR / "tarefas.db"
 DB_FILE = APP_DIR / "tarefas.db"
 DIAS = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
 # (fundo da atividade, texto, borda); nomes antigos preservados no banco.
@@ -92,7 +90,11 @@ def main(page: ft.Page):
     titulo_periodo = ft.Text(size=17, weight=ft.FontWeight.BOLD, color="#26334D")
     resumo = ft.Text(size=12, color="#6D7890")
     grade = ft.Column(spacing=0, expand=True)
+    raiz = ft.Column(expand=True, spacing=0)
     hoje = date.today()
+    modo_resumo = [False]
+    # O topo da agenda é recolhido ao percorrer os horários e reaparece no início.
+    topo_recolhido = [False]
 
     def carregar():
         inicio = semana_atual[0].isoformat()
@@ -282,12 +284,150 @@ def main(page: ft.Page):
                 minuto += INTERVALO
         return ft.Column(spacing=0, width=DAY_WIDTH, controls=conteudo)
 
+    def abrir_visao_completa(e):
+        modo_resumo[0] = True
+        desenhar()
+
+    def voltar_agenda(e):
+        modo_resumo[0] = False
+        topo_recolhido[0] = False
+        desenhar()
+
+    def desenhar_visao_completa(tarefas):
+        """Mostra a semana inteira em uma única tela, sem rolagem de horários.
+
+        A escala é calculada para a tela atual. Em telas estreitas as palavras
+        são abreviadas para preservar os sete dias lado a lado.
+        """
+        largura = page.width or 390
+        altura = page.height or 780
+        # Apenas uma pequena barra superior permanece nesta tela.
+        # 34 faixas de meia hora precisam caber integralmente sem rolagem vertical.
+        # Considera a área reservada para a barra de status / navegação do Android.
+        altura_slot = max(8.0, min(25.0, (altura - 164) / 34))
+        largura_horas = 43
+        largura_dia = max(30, (largura - largura_horas - 12) / 7)
+        largura_texto = max(6.5, min(10.0, largura_dia / 7.7))
+        dias_curtos = ["SEG", "TER", "QUA", "QUI", "SEX", "SÁB", "DOM"]
+
+        cabecalhos = ft.Row(spacing=0, controls=[
+            ft.Container(width=largura_horas, height=37, bgcolor="#EDF1F8"),
+            *[
+                ft.Container(
+                    width=largura_dia, height=37, bgcolor="#E6EEFF" if
+                    semana_atual[0] + timedelta(days=i) == date.today() else "#F5F7FC",
+                    alignment=ft.Alignment.CENTER,
+                    border=ft.Border(right=ft.BorderSide(1, "#DDE4F0")),
+                    content=ft.Column(spacing=0,
+                        alignment=ft.MainAxisAlignment.CENTER,
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                        controls=[
+                            ft.Text(dias_curtos[i], size=9, weight=ft.FontWeight.BOLD, color="#405274"),
+                            ft.Text(f"{(semana_atual[0] + timedelta(days=i)):%d/%m}", size=9,
+                                    color="#405274"),
+                        ]),
+                ) for i in range(7)
+            ],
+        ])
+
+        regua = ft.Column(spacing=0, controls=[
+            ft.Container(
+                width=largura_horas, height=altura_slot,
+                bgcolor="#F6F8FC" if m % 60 == 0 else "#FFFFFF",
+                alignment=ft.Alignment.TOP_CENTER,
+                border=ft.Border(bottom=ft.BorderSide(0.5, "#EDF0F6")),
+                content=ft.Text(horario(m), size=8, color="#64718C"),
+            ) for m in range(PRIMEIRO_HORARIO, ULTIMO_HORARIO, INTERVALO)
+        ])
+
+        colunas = []
+        for i in range(7):
+            d = (semana_atual[0] + timedelta(days=i)).isoformat()
+            atividades = sorted(
+                (t for t in tarefas if t["dia"] == d and
+                 t["fim"] > PRIMEIRO_HORARIO and t["inicio"] < ULTIMO_HORARIO),
+                key=lambda t: t["inicio"],
+            )
+            atividades_inicio = {max(PRIMEIRO_HORARIO, t["inicio"]): t for t in atividades}
+            celulas = []
+            minuto = PRIMEIRO_HORARIO
+            while minuto < ULTIMO_HORARIO:
+                t = atividades_inicio.get(minuto)
+                if t:
+                    fim = min(t["fim"], ULTIMO_HORARIO)
+                    num_slots = (fim - minuto) // INTERVALO
+                    cor_fundo, cor_letra, cor_borda = CORES.get(t["cor"], CORES["Azul"])
+                    h = num_slots * altura_slot
+                    # O nome aparece em cada bloco e não é editado nesta tela:
+                    # a visão normal permanece responsável pela edição.
+                    rotulo = ("✓ " if t["concluida"] else "") + t["titulo"]
+                    celulas.append(ft.Container(
+                        height=h, width=largura_dia, bgcolor=cor_fundo,
+                        border=ft.Border(left=ft.BorderSide(2, cor_borda),
+                                         bottom=ft.BorderSide(1, "#FFFFFF")),
+                        padding=ft.Padding.symmetric(horizontal=2, vertical=0),
+                        tooltip=f"{t['titulo']} · {horario(t['inicio'])}–{horario(t['fim'])}",
+                        content=ft.Text(rotulo, size=largura_texto,
+                                        color=cor_letra, weight=ft.FontWeight.W_600,
+                                        max_lines=max(1, int(h / (largura_texto + 2))),
+                                        overflow=ft.TextOverflow.ELLIPSIS),
+                    ))
+                    minuto = fim
+                else:
+                    celulas.append(ft.Container(
+                        width=largura_dia, height=altura_slot,
+                        bgcolor="#FAFBFE" if minuto % 60 == 0 else "#FFFFFF",
+                        border=ft.Border(right=ft.BorderSide(0.5, "#E6EAF3"),
+                                         bottom=ft.BorderSide(0.5, "#EDF0F6")),
+                    ))
+                    minuto += INTERVALO
+            colunas.append(ft.Column(spacing=0, controls=celulas))
+
+        tabela = ft.Column(spacing=0, controls=[
+            cabecalhos,
+            ft.Row(spacing=0, vertical_alignment=ft.CrossAxisAlignment.START,
+                   controls=[regua, *colunas]),
+        ])
+        # Tela exclusiva: não renderiza título, formulário ou barra de navegação
+        # da agenda normal acima da tabela.
+        barra = ft.Container(
+            height=52, bgcolor="#FFFFFF", padding=ft.Padding.symmetric(horizontal=6),
+            content=ft.Row(spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                controls=[
+                    ft.IconButton(icon=ft.Icons.ARROW_BACK, tooltip="Voltar à agenda", on_click=voltar_agenda),
+                    ft.Column(spacing=0, expand=True,
+                        alignment=ft.MainAxisAlignment.CENTER,
+                        controls=[
+                            ft.Text("Semana inteira", size=15, weight=ft.FontWeight.BOLD, color="#25334E"),
+                            ft.Text(f"{semana_atual[0]:%d/%m} – {(semana_atual[0] + timedelta(days=6)):%d/%m/%Y}",
+                                    size=10, color="#738096"),
+                        ]),
+                    ft.IconButton(icon=ft.Icons.CHEVRON_LEFT, tooltip="Semana anterior",
+                                  on_click=lambda e: mudar_semana(-1)),
+                    ft.IconButton(icon=ft.Icons.CHEVRON_RIGHT, tooltip="Próxima semana",
+                                  on_click=lambda e: mudar_semana(1)),
+                ]),
+        )
+        raiz.controls = [ft.Container(
+            expand=True, bgcolor="#FFFFFF",
+            content=ft.Column(expand=True, spacing=0, controls=[
+                barra,
+                ft.Container(padding=ft.Padding.symmetric(horizontal=4, vertical=1),
+                             content=tabela),
+            ]),
+        )]
+
     def desenhar():
         tarefas = carregar()
         ultima = semana_atual[0] + timedelta(days=6)
         titulo_periodo.value = f"{semana_atual[0]:%d/%m/%Y}  —  {ultima:%d/%m/%Y}"
         horas = sum(t["fim"] - t["inicio"] for t in tarefas) / 60
         resumo.value = f"{len(tarefas)} atividades nesta semana  ·  {horas:g} h planejadas  ·  toque num espaço livre para adicionar"
+
+        if modo_resumo[0]:
+            desenhar_visao_completa(tarefas)
+            page.update()
+            return
 
         regua = ft.Column(spacing=0, width=TIME_WIDTH, controls=[
             ft.Container(height=SLOT_HEIGHT, width=TIME_WIDTH,
@@ -296,28 +436,80 @@ def main(page: ft.Page):
                                          color="#44516D" if (m // 30) % 2 == 0 else "#748099"))
             for m in range(PRIMEIRO_HORARIO, ULTIMO_HORARIO, INTERVALO)
         ])
-        largura_total = TIME_WIDTH + 7 * DAY_WIDTH + 7  # espaço entre colunas
-        # O cabeçalho e a grade estão DENTRO da mesma área de rolagem
-        # HORIZONTAL. Apenas o corpo rola VERTICALMENTE, portanto os nomes
-        # dos dias permanecem sempre fixos na parte superior.
-        cabecalhos = ft.Row(spacing=1, controls=[
-            ft.Container(height=65, width=TIME_WIDTH, bgcolor="#F6F8FC"),
-            *[cabecalho_dia(i) for i in range(7)],
+        # V8: uma ÚNICA rolagem vertical para a régua e as atividades.
+        # A régua continua fixa horizontalmente porque não participa da
+        # rolagem horizontal dos dias, mas rola no mesmo fluxo vertical.
+        # Isso elimina o atraso causado por scroll_to() a cada gesto.
+        largura_dias = 7 * DAY_WIDTH + 6
+        cabecalhos = ft.Row(spacing=1, controls=[cabecalho_dia(i) for i in range(7)])
+        corpo = ft.Row(
+            spacing=1, vertical_alignment=ft.CrossAxisAlignment.START,
+            controls=[coluna_dia(i, tarefas) for i in range(7)],
+        )
+
+        # Somente a rolagem HORIZONTAL do corpo precisa atualizar o topo.
+        # A rolagem VERTICAL, que precisa de alinhamento perfeito, é nativa
+        # e compartilhada entre régua e células, sem callbacks de sincronização.
+        topo_dias = ft.Row(
+            expand=True, spacing=0, scroll=ft.ScrollMode.HIDDEN,
+            controls=[ft.Container(width=largura_dias, content=cabecalhos)],
+        )
+
+        async def acompanhar_horizontal(e):
+            try:
+                pixels = float(e.pixels)
+            except (ValueError, TypeError, AttributeError):
+                return
+            await topo_dias.scroll_to(offset=max(0, pixels), duration=0)
+
+        corpo_dias = ft.Row(
+            expand=True, spacing=0, scroll=ft.ScrollMode.AUTO,
+            scroll_interval=5, on_scroll=acompanhar_horizontal,
+            controls=[ft.Container(width=largura_dias, content=corpo)],
+        )
+
+        # Cabeçalho dos dias: fora da rolagem vertical, permanece no topo.
+        topo_grade = ft.Row(spacing=0, controls=[
+            ft.Container(
+                width=TIME_WIDTH, height=65, bgcolor="#F6F8FC",
+                alignment=ft.Alignment.CENTER,
+                content=ft.Text("Hora", size=11, color="#64718C"),
+            ),
+            ft.Container(expand=True, height=65, content=topo_dias),
         ])
-        corpo = ft.Row(spacing=1, vertical_alignment=ft.CrossAxisAlignment.START,
-                       controls=[regua] + [coluna_dia(i, tarefas) for i in range(7)])
-        grade.controls = [
-            ft.Row(expand=True, spacing=0, scroll=ft.ScrollMode.AUTO, controls=[
-                ft.Column(width=largura_total, expand=True, spacing=0, controls=[
-                    cabecalhos,
-                    ft.Column(expand=True, spacing=0, scroll=ft.ScrollMode.AUTO,
-                              controls=[corpo]),
-                ])
-            ])
-        ]
+
+        async def acompanhar_rolagem(e):
+            try:
+                pixels = float(e.pixels)
+            except (ValueError, TypeError, AttributeError):
+                return
+            recolher = pixels > 145 if not topo_recolhido[0] else pixels >= 55
+            if recolher != topo_recolhido[0]:
+                topo_recolhido[0] = recolher
+                faixa_topo.height = 0 if recolher else None
+                cab.opacity = 0 if recolher else 1
+                faixa_topo.update()
+
+        # RÉGUA E CORPO: filhos da mesma área de rolagem vertical.
+        grade_vertical = ft.Column(
+            expand=True, spacing=0, scroll=ft.ScrollMode.AUTO,
+            scroll_interval=20, on_scroll=acompanhar_rolagem,
+            controls=[ft.Row(
+                spacing=0, vertical_alignment=ft.CrossAxisAlignment.START,
+                controls=[
+                    ft.Container(width=TIME_WIDTH, content=regua),
+                    ft.Container(expand=True, content=corpo_dias),
+                ],
+            )],
+        )
+        grade.controls = [topo_grade, grade_vertical]
+        faixa_topo.height = 0 if topo_recolhido[0] else None
+        cab.opacity = 0 if topo_recolhido[0] else 1
+        raiz.controls = [faixa_topo, grade]
         page.update()
 
     cab = ft.Container(
+        animate_opacity=ft.Animation(duration=220, curve=ft.AnimationCurve.EASE_IN_OUT),
         bgcolor="#FFFFFF", padding=ft.Padding.symmetric(horizontal=20, vertical=16),
         border=ft.Border(bottom=ft.BorderSide(1, "#E7ECF4")),
         content=ft.Column(spacing=12, controls=[
@@ -336,12 +528,32 @@ def main(page: ft.Page):
                 ft.IconButton(icon=ft.Icons.CHEVRON_LEFT, tooltip="Semana anterior", on_click=lambda e: mudar_semana(-1)),
                 ft.IconButton(icon=ft.Icons.CHEVRON_RIGHT, tooltip="Próxima semana", on_click=lambda e: mudar_semana(1)),
                 ft.TextButton("Hoje", on_click=ir_hoje),
+                ft.Button("Visão completa", icon=ft.Icons.GRID_VIEW, on_click=abrir_visao_completa),
                 titulo_periodo,
             ]),
             resumo,
         ]),
     )
-    page.add(ft.Column(expand=True, spacing=0, controls=[cab, grade]))
+    # O invólucro anima a altura, sem remover o cabeçalho da árvore.
+    # Isso mantém os controles intactos e evita o salto visual do visible=False.
+    faixa_topo = ft.Container(
+        content=cab,
+        clip_behavior=ft.ClipBehavior.HARD_EDGE,
+        animate_size=ft.Animation(duration=280, curve=ft.AnimationCurve.EASE_IN_OUT),
+    )
+
+    # SafeArea respeita automaticamente status bar, notch e barra de navegação.
+    # A margem mínima adicional impede que botões encostem nesses elementos.
+    page.add(ft.SafeArea(
+        content=raiz,
+        expand=True,
+        minimum_padding=ft.Padding.only(top=10, bottom=3),
+    ))
+    # Recalcula a escala quando a orientação ou o tamanho da janela muda.
+    def ao_redimensionar(e):
+        if modo_resumo[0]:
+            desenhar()
+    page.on_resize = ao_redimensionar
     desenhar()
 
 
