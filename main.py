@@ -1,23 +1,43 @@
 """Organizador semanal - Flet + SQLite. Execute com: python main.py"""
 from __future__ import annotations
 
+import os
 import sqlite3
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import flet as ft
 
-APP_DIR = Path.home() / ".organizador_semanal"
+APP_DIR = Path(os.environ.get("FLET_APP_STORAGE_DATA") or (Path.home() / ".organizador_semanal"))
 APP_DIR.mkdir(parents=True, exist_ok=True)
 DB_FILE = APP_DIR / "tarefas.db"
 DIAS = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
+# (fundo da atividade, texto, borda); nomes antigos preservados no banco.
 CORES = {
     "Azul": ("#E6F0FF", "#2456A6", "#4A83DF"),
     "Verde": ("#E3F5E9", "#217447", "#40A773"),
     "Roxo": ("#EEE8FF", "#6241A2", "#8D6AD3"),
     "Laranja": ("#FFF0DC", "#9B5A12", "#E5A34B"),
     "Rosa": ("#FFE8F0", "#A83E68", "#E77CA2"),
+    "Lavanda": ("#F3ECFF", "#6C4B92", "#A88BE2"),
+    "Lilás": ("#F5E8FA", "#864795", "#C183D1"),
+    "Violeta": ("#EDE6FB", "#59358D", "#8961CB"),
+    "Coral": ("#FFEAE5", "#A7473B", "#EB8270"),
+    "Pêssego": ("#FFF0E8", "#A4673C", "#F2A57F"),
+    "Salmão": ("#FCE9E7", "#984C57", "#D9838A"),
+    "Vermelho": ("#FFE6E6", "#A32B39", "#DD5D67"),
+    "Amarelo": ("#FFF8D9", "#806118", "#DAB949"),
+    "Mostarda": ("#FFF1CE", "#876111", "#CA9D30"),
+    "Menta": ("#E4F8F1", "#246D59", "#64BDA1"),
+    "Turquesa": ("#DFF7F5", "#1C7175", "#42B2B7"),
+    "Ciano": ("#E1F6FC", "#246B81", "#54AFCE"),
+    "Azul-marinho": ("#E6ECF6", "#344E76", "#6985B4"),
+    "Oliva": ("#EDF1DE", "#5C6A33", "#9BAC5A"),
+    "Cinza": ("#EDF0F4", "#526072", "#8B98A9"),
 }
+PRIMEIRO_HORARIO = 7 * 60
+ULTIMO_HORARIO = 24 * 60
+INTERVALO = 30
 SLOT_HEIGHT = 44
 DAY_WIDTH = 165
 TIME_WIDTH = 62
@@ -51,8 +71,9 @@ def segunda(d):
 
 
 def opcoes_horario(incluir_24=False):
-    limite = 49 if incluir_24 else 48
-    return [ft.DropdownOption(key=str(i * 30), text=horario(i * 30)) for i in range(limite)]
+    fim = ULTIMO_HORARIO + (INTERVALO if incluir_24 else 0)
+    inicio = PRIMEIRO_HORARIO + (INTERVALO if incluir_24 else 0)
+    return [ft.DropdownOption(key=str(m), text=horario(m)) for m in range(inicio, fim, INTERVALO)]
 
 
 def main(page: ft.Page):
@@ -68,7 +89,7 @@ def main(page: ft.Page):
     semana_atual = [segunda(date.today())]
     titulo_periodo = ft.Text(size=17, weight=ft.FontWeight.BOLD, color="#26334D")
     resumo = ft.Text(size=12, color="#6D7890")
-    grade = ft.Column(spacing=0, scroll=ft.ScrollMode.AUTO, expand=True)
+    grade = ft.Column(spacing=0, expand=True)
     hoje = date.today()
 
     def carregar():
@@ -87,7 +108,7 @@ def main(page: ft.Page):
     def editar(tarefa=None, dia=None, inicio=540):
         # A mesma janela atende inclusão e edição de qualquer tarefa.
         d = date.fromisoformat(tarefa["dia"]) if tarefa else (dia or hoje)
-        comeco = tarefa["inicio"] if tarefa else inicio
+        comeco = tarefa["inicio"] if tarefa else max(PRIMEIRO_HORARIO, inicio)
         termino = tarefa["fim"] if tarefa else min(1440, inicio + 30)
         titulo = ft.TextField(label="Nome da atividade *", value=tarefa["titulo"] if tarefa else "", autofocus=True)
         descricao = ft.TextField(label="Observações (opcional)", value=tarefa["descricao"] if tarefa else "", multiline=True, min_lines=2, max_lines=3)
@@ -96,11 +117,26 @@ def main(page: ft.Page):
                               text=f"{DIAS[i]} · {(semana_atual[0] + timedelta(days=i)):%d/%m}")
             for i in range(7)
         ])
-        campo_inicio = ft.Dropdown(label="Início", value=str(comeco), options=opcoes_horario())
-        campo_fim = ft.Dropdown(label="Fim", value=str(termino), options=opcoes_horario(True))
-        campo_cor = ft.Dropdown(label="Cor", value=tarefa["cor"] if tarefa else "Azul", options=[
+        op_inicio = opcoes_horario()
+        op_fim = opcoes_horario(True)
+        # Permite editar compromissos antigos criados antes das 07h, sem apagá-los.
+        if comeco < PRIMEIRO_HORARIO:
+            op_inicio.insert(0, ft.DropdownOption(key=str(comeco), text=horario(comeco) + " (antigo)"))
+        if termino < PRIMEIRO_HORARIO + INTERVALO:
+            op_fim.insert(0, ft.DropdownOption(key=str(termino), text=horario(termino) + " (antigo)"))
+        campo_inicio = ft.Dropdown(label="Início", value=str(comeco), options=op_inicio)
+        campo_fim = ft.Dropdown(label="Fim", value=str(termino), options=op_fim)
+        campo_cor = ft.Dropdown(label="Cor (20 opções)", value=tarefa["cor"] if tarefa else "Azul", options=[
             ft.DropdownOption(key=k, text=k) for k in CORES
         ])
+        amostra_cor = ft.Container(width=40, height=24, border_radius=7,
+                                  bgcolor=CORES.get(campo_cor.value, CORES["Azul"])[2])
+
+        def mudar_cor(e):
+            amostra_cor.bgcolor = CORES.get(campo_cor.value, CORES["Azul"])[2]
+            amostra_cor.update()
+
+        campo_cor.on_select = mudar_cor
         concluida = ft.Checkbox(label="Atividade concluída", value=bool(tarefa["concluida"]) if tarefa else False)
         erro = ft.Text(color="#BA3341", size=12)
 
@@ -111,6 +147,8 @@ def main(page: ft.Page):
                 erro.value = "Informe o nome da atividade."
             elif b <= a:
                 erro.value = "O horário final precisa ser posterior ao inicial."
+            elif (a < PRIMEIRO_HORARIO or b > ULTIMO_HORARIO) and not (tarefa and a == tarefa["inicio"] and b == tarefa["fim"]):
+                erro.value = "Use horários entre 07:00 e 24:00."
             else:
                 conflito = db.execute(
                     "SELECT id FROM tarefas WHERE dia=? AND inicio < ? AND fim > ? AND id != ? LIMIT 1",
@@ -156,7 +194,8 @@ def main(page: ft.Page):
             content=ft.Container(width=410, content=ft.Column(
                 controls=[titulo, campo_dia,
                           ft.Row([ft.Container(content=campo_inicio, expand=True), ft.Container(content=campo_fim, expand=True)]),
-                          campo_cor, descricao, concluida, erro],
+                          ft.Row([ft.Container(content=campo_cor, expand=True), amostra_cor]),
+                          descricao, concluida, erro],
                 tight=True, spacing=11, scroll=ft.ScrollMode.AUTO,
             )),
             actions=botoes,
@@ -183,9 +222,9 @@ def main(page: ft.Page):
             ),
         )
 
-    def bloco_tarefa(t):
+    def bloco_tarefa(t, vis_inicio, vis_fim):
         bg, cor_texto, detalhe = CORES.get(t["cor"], CORES["Azul"])
-        altura = ((t["fim"] - t["inicio"]) // 30) * SLOT_HEIGHT
+        altura = ((vis_fim - vis_inicio) // INTERVALO) * SLOT_HEIGHT
         concluida = bool(t["concluida"])
         return ft.Container(
             width=DAY_WIDTH, height=altura,
@@ -202,23 +241,10 @@ def main(page: ft.Page):
             tooltip="Clique para editar ou excluir",
         )
 
-    def coluna_dia(indice, tarefas):
+    def cabecalho_dia(indice):
         d = semana_atual[0] + timedelta(days=indice)
-        do_dia = sorted((x for x in tarefas if x["dia"] == d.isoformat()), key=lambda x: x["inicio"])
-        por_inicio = {x["inicio"]: x for x in do_dia}
-        conteudo = []
-        slot = 0
-        while slot < 48:
-            minuto = slot * 30
-            if minuto in por_inicio:
-                t = por_inicio[minuto]
-                conteudo.append(bloco_tarefa(t))
-                slot += (t["fim"] - t["inicio"]) // 30
-            else:
-                conteudo.append(celula_vazia(d, minuto))
-                slot += 1
         destaque = d == date.today()
-        cabecalho = ft.Container(
+        return ft.Container(
             height=65, width=DAY_WIDTH, alignment=ft.Alignment.CENTER,
             bgcolor="#E6EEFF" if destaque else "#FFFFFF",
             border=ft.Border(bottom=ft.BorderSide(1, "#E8EDF5")),
@@ -226,28 +252,67 @@ def main(page: ft.Page):
                 spacing=2, alignment=ft.MainAxisAlignment.CENTER,
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 controls=[ft.Text(DIAS[indice], size=12, weight=ft.FontWeight.W_500, color="#64718C"),
-                          ft.Text(f"{d:%d/%m}", size=16, weight=ft.FontWeight.BOLD, color="#315FC2" if destaque else "#25334E")]
+                          ft.Text(f"{d:%d/%m}", size=16, weight=ft.FontWeight.BOLD,
+                                  color="#315FC2" if destaque else "#25334E")],
             ),
         )
-        return ft.Column(spacing=0, controls=[cabecalho, *conteudo])
+
+    def coluna_dia(indice, tarefas):
+        d = semana_atual[0] + timedelta(days=indice)
+        do_dia = sorted(
+            (x for x in tarefas if x["dia"] == d.isoformat()
+             and x["fim"] > PRIMEIRO_HORARIO and x["inicio"] < ULTIMO_HORARIO),
+            key=lambda x: x["inicio"],
+        )
+        # Tarefas antigas que atravessam as 07h permanecem visíveis, mas
+        # apenas sua parte dentro da grade será desenhada.
+        por_inicio = {max(PRIMEIRO_HORARIO, x["inicio"]): x for x in do_dia}
+        conteudo = []
+        minuto = PRIMEIRO_HORARIO
+        while minuto < ULTIMO_HORARIO:
+            t = por_inicio.get(minuto)
+            if t:
+                vis_fim = min(ULTIMO_HORARIO, t["fim"])
+                conteudo.append(bloco_tarefa(t, minuto, vis_fim))
+                minuto = vis_fim
+            else:
+                conteudo.append(celula_vazia(d, minuto))
+                minuto += INTERVALO
+        return ft.Column(spacing=0, width=DAY_WIDTH, controls=conteudo)
 
     def desenhar():
         tarefas = carregar()
         ultima = semana_atual[0] + timedelta(days=6)
         titulo_periodo.value = f"{semana_atual[0]:%d/%m/%Y}  —  {ultima:%d/%m/%Y}"
         horas = sum(t["fim"] - t["inicio"] for t in tarefas) / 60
-        resumo.value = f"{len(tarefas)} atividades nesta semana  ·  {horas:g} h planejadas  ·  clique num espaço livre para adicionar"
-        regua = ft.Column(spacing=0, controls=[
-            ft.Container(height=65, width=TIME_WIDTH, bgcolor="#F6F8FC"),
-            *[ft.Container(height=SLOT_HEIGHT, width=TIME_WIDTH,
-                           alignment=ft.Alignment.TOP_CENTER,
-                           content=ft.Text(horario(i * 30), size=11, color="#748099" if i % 2 else "#44516D"))
-              for i in range(48)]
+        resumo.value = f"{len(tarefas)} atividades nesta semana  ·  {horas:g} h planejadas  ·  toque num espaço livre para adicionar"
+
+        regua = ft.Column(spacing=0, width=TIME_WIDTH, controls=[
+            ft.Container(height=SLOT_HEIGHT, width=TIME_WIDTH,
+                         alignment=ft.Alignment.TOP_CENTER,
+                         content=ft.Text(horario(m), size=11,
+                                         color="#44516D" if (m // 30) % 2 == 0 else "#748099"))
+            for m in range(PRIMEIRO_HORARIO, ULTIMO_HORARIO, INTERVALO)
         ])
-        calendario = ft.Row(spacing=1, vertical_alignment=ft.CrossAxisAlignment.START,
-                           controls=[regua] + [coluna_dia(i, tarefas) for i in range(7)],
-                           scroll=ft.ScrollMode.AUTO)
-        grade.controls = [calendario]
+        largura_total = TIME_WIDTH + 7 * DAY_WIDTH + 7  # espaço entre colunas
+        # O cabeçalho e a grade estão DENTRO da mesma área de rolagem
+        # HORIZONTAL. Apenas o corpo rola VERTICALMENTE, portanto os nomes
+        # dos dias permanecem sempre fixos na parte superior.
+        cabecalhos = ft.Row(spacing=1, controls=[
+            ft.Container(height=65, width=TIME_WIDTH, bgcolor="#F6F8FC"),
+            *[cabecalho_dia(i) for i in range(7)],
+        ])
+        corpo = ft.Row(spacing=1, vertical_alignment=ft.CrossAxisAlignment.START,
+                       controls=[regua] + [coluna_dia(i, tarefas) for i in range(7)])
+        grade.controls = [
+            ft.Row(expand=True, spacing=0, scroll=ft.ScrollMode.AUTO, controls=[
+                ft.Column(width=largura_total, expand=True, spacing=0, controls=[
+                    cabecalhos,
+                    ft.Column(expand=True, spacing=0, scroll=ft.ScrollMode.AUTO,
+                              controls=[corpo]),
+                ])
+            ])
+        ]
         page.update()
 
     cab = ft.Container(
