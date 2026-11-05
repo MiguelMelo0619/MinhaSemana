@@ -7,8 +7,18 @@ from pathlib import Path
 
 import flet as ft
 
-APP_DIR = Path.home() / ".organizador_semanal"
+import os
+from pathlib import Path
+
+# Pasta persistente e privada do aplicativo
+APP_DIR = Path(
+    os.environ.get("FLET_APP_STORAGE_DATA") or
+    (Path.home() / ".organizador_semanal")
+)
+
 APP_DIR.mkdir(parents=True, exist_ok=True)
+
+DB_PATH = APP_DIR / "tarefas.db"
 DB_FILE = APP_DIR / "tarefas.db"
 DIAS = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
 CORES = {
