@@ -1,1 +1,2 @@
-flet==1.0.5
+flet==1.1.0
+flet_datatable2==1.1.0
